@@ -12,17 +12,19 @@
   by Tony Pottier
   https://idyl.io
   
- */
-
-#include "Button.h"
-#include "Knob.h"
-#include "TinyGPS++.h"
-#include <SoftwareSerial.h>
-#include "RTClib.h"
-
-RTC_DS3231 rtc;
-
-/*
+ *
+ *   ARDUINO NIXIE CLOCK
+ * 
+ *   NIXIE1 NIXIE2   NIXIE3 NIXIE4   NIXIE5 NIXIE6
+ *     __    __        __    __        __    __
+ *    /  \  /  \      /  \  /  \      /  \  /  \
+ *    | 2|  | 3|      | 5|  | 9|      | 5|  | 9|
+ * ___|__|__|__|______|__|__|__|______|__|__|__|___
+ * | LEFT DISPLAY | CENTER DISPLAY | RIGHT DISPLAY |
+ * |     O        |      o         |      o        |
+ * | LEFT KNOB    | CENTER KNOB    | RIGHT KNOB    |
+ * |_______________________________________________|
+ * 
  * MAPPING OF THE ARDUINO MEGA
  * 
  * PORT K
@@ -55,6 +57,16 @@ RTC_DS3231 rtc;
  * A7  A6  A5  A4  A3  A2  A1  A0
  * S_S S_A S_B SW  BPR PWR 
  */
+
+#include "Button.h"
+#include "Knob.h"
+#include "TinyGPS++.h"
+#include <SoftwareSerial.h>
+#include "RTClib.h"
+
+RTC_DS3231 rtc;
+
+#define DEBUG
 
 #define PORT_DISPLAY_LEFT PORTK
 #define PORT_DISPLAY_LEFT_REGISTER DDRK
@@ -96,7 +108,7 @@ uint8_t blinker;
 uint16_t blinkerAccumulator;
 
 int8_t h, m, s, dd, mm, yy;
-uint8_t setH, setM, setS;
+uint8_t setLeft, setCenter, setRight;
 DateTime now, previous;
 
 
@@ -115,7 +127,10 @@ void changeState(uint8_t newState){
 
 void setup() {
 
+#ifdef DEBUG
   Serial.begin(57600);
+#endif
+
   
   //Set port as output (all 8 pins)
   PORT_DISPLAY_LEFT_REGISTER = 0xFF;
@@ -129,7 +144,7 @@ void setup() {
   //set initial variables
   state = STATE_BOOTING_UP;
   h = m = s = dd = mm = yy = 0;
-  setH = setM = setS = false;
+  setLeft = setCenter = setRight = false;
   portLeftValue = portCenterValue = portRightValue = 0;
 
   //register the rotary encoders
@@ -180,6 +195,10 @@ void loop() {
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x88; delay(50);
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x99; delay(100);
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x00; delay(200);
+
+    //All buttons are hardware debounced with resistor/capacitors
+    //This causes incorrect edge detections on the first power up
+    //This resetRight all user buttons
     knobLeft.reset();
     knobCenter.reset();
     knobRight.reset();
@@ -204,34 +223,33 @@ void loop() {
     //blinker
     blinkerAccumulator += elapsed;
     while(blinkerAccumulator >= BLINK_SPEED){
-      //Serial.println(blinkerAccumulator);
       blinkerAccumulator -= BLINK_SPEED;
       blinker = !blinker;
 
       if(blinker){
-        if(setH){
+        if(setLeft){
           numberToPort(&portLeftValue,0xff);
           flushDisplay(true, false, false);
         }
-        if(setM){
+        if(setCenter){
           numberToPort(&portCenterValue,0xff);
           flushDisplay(false, true, false);
         }
-        if(setS){
+        if(setRight){
           numberToPort(&portRightValue,0xff);
           flushDisplay(false, false, true);
         }
       }
       else{
-        if(setH){
+        if(setLeft){
           numberToPort(&portLeftValue,h);
           flushDisplay(true, false, false);
         }
-        if(setM){
+        if(setCenter){
           numberToPort(&portCenterValue,m);
           flushDisplay(false, true, false);
         }
-        if(setS){
+        if(setRight){
           numberToPort(&portRightValue,s);
           flushDisplay(false, false, true);
         }
@@ -248,7 +266,11 @@ void loop() {
     
 
     //change state to display the date
-    if(btnDateDisplay.falling()){
+    if(btnDateDisplay.falling()){  
+      //user was currently setting the time and requested to display the date?
+      //this is an edge case that shouldn't matter
+      setLeft = setCenter = setRight = false;
+      
       changeState(STATE_DISPLAY_DATE);
       updateDate();
     }
@@ -256,7 +278,7 @@ void loop() {
     
 
     //update H
-    if(setH){
+    if(setLeft){
       int8_t tmp = knobLeft.read();
       if(tmp != 0){
         h += tmp;
@@ -267,7 +289,7 @@ void loop() {
       }
     }
 
-    if(setM){
+    if(setCenter){
       int8_t tmp = knobCenter.read();
       if(tmp != 0){
         m += tmp;
@@ -278,7 +300,7 @@ void loop() {
       }
     }
 
-    if(setS){
+    if(setRight){
       int8_t tmp = knobRight.read();
       if(tmp != 0){
         s += tmp;
@@ -291,12 +313,12 @@ void loop() {
 
     //user wants to set time?
     if(knobLeft.falling()){
-      if(setH == false){
-        setH = true;
+      if(setLeft == false){
+        setLeft = true;
         knobLeft.read(); //flush stored value if any
       }
       else{
-        setH = false;
+        setLeft = false;
         //save HOUR set by the user
         rtc.adjust(DateTime(2000 + now.year(), now.month(), now.day(), h, now.minute(), now.second()));
         numberToPort(&portLeftValue,h);
@@ -305,25 +327,25 @@ void loop() {
     }
 
     if(knobCenter.falling()){
-      if(setM){
-        setM = false;
+      if(setCenter){
+        setCenter = false;
         rtc.adjust(DateTime(2000 + now.year(), now.month(), now.day(), now.hour(), m, now.second()));
         numberToPort(&portCenterValue,m);
         flushDisplay(false, true, false);
       }
       else{
-        setM = true;
+        setCenter = true;
         knobCenter.read(); //flush any stored value if any
       }
     }
 
     if(knobRight.falling()){
-      if(setS == false){
-        setS = true;
+      if(setRight == false){
+        setRight = true;
         knobRight.read(); //flush stored value if any
       }
       else{
-        setS = false;
+        setRight = false;
         //save SECOND set by the user
         rtc.adjust(DateTime(2000 + now.year(), now.month(), now.day(), now.hour(), now.minute(),s));
         numberToPort(&portRightValue,s);
@@ -360,7 +382,6 @@ void loop() {
   //The power switch does not belong to a specific state and is always polled
   btnPowerSwitch.poll();
   if(btnPowerSwitch.rising() || btnPowerSwitch.falling()){
-    Serial.println(btnPowerSwitch.getState());
     digitalWrite(PIN_POWER_SWITCH, btnPowerSwitch.getState());
   }
 
@@ -414,25 +435,25 @@ void flushDisplay(uint8_t flushH, uint8_t flushM, uint8_t flushS){
 
     if(flushH){
       PORT_DISPLAY_LEFT = portLeftValue;
+      #ifdef DEBUG
       Serial.print("H:");
       Serial.println(portLeftValue, HEX);
+      #endif
     }
     if(flushM){
       PORT_DISPLAY_CENTER = portCenterValue;
+      #ifdef DEBUG
       Serial.print("M:");
       Serial.println(portCenterValue, HEX);
+      #endif
     }
     if(flushS){
       PORT_DISPLAY_RIGHT = portRightValue;
+      #ifdef DEBUG
       Serial.print("S:");
       Serial.println(portRightValue, HEX);
+      #endif
     }
-    //Serial.print(portLeftValue, HEX);
-    //Serial.print("-");
-    //Serial.print(portCenterValue, HEX);
-    //Serial.print("-");
-    //Serial.print(portRightValue, HEX);
-    //Serial.print("\n");
 }
 
 
@@ -441,13 +462,13 @@ void flushDisplay(uint8_t flushH, uint8_t flushM, uint8_t flushS){
 void updateTime(){updateTime(true);}
 void updateTime(uint8_t flush){
 
-  if(!setH){
+  if(!setLeft){
     h = now.hour();
   }
-  if(!setM){
+  if(!setCenter){
     m = now.minute();
   }
-  if(!setS){
+  if(!setRight){
     s = now.second();
   }
   
@@ -459,12 +480,6 @@ void updateTime(uint8_t flush){
     flushDisplay(now.hour() != previous.hour(), now.minute() != previous.minute(), now.second() != previous.second());
   }
 
-
-
-
-  //PORT_DISPLAY_LEFT = (tH << 4) | dH;
-  //PORT_DISPLAY_CENTER = (tM << 4) | dM;
-  //PORT_DISPLAY_LEFT = (tS << 4) | dS;
 }
 
 
