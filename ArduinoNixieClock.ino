@@ -131,6 +131,9 @@ void setup() {
   Serial.begin(57600);
 #endif
 
+  //turn OFF the display ASAP!
+  pinMode(PIN_POWER_SWITCH, OUTPUT);
+  digitalWrite(PIN_POWER_SWITCH, LOW);
   
   //Set port as output (all 8 pins)
   PORT_DISPLAY_LEFT_REGISTER = 0xFF;
@@ -155,9 +158,21 @@ void setup() {
   //register the button to switch power and display
   btnDateDisplay.setup(PIN_BUTTON_DATE_DISPLAY, INPUT_PULLUP, true);
   btnPowerSwitch.setup(PIN_BUTTON_POWER_SWITCH, INPUT_PULLUP, true);
-  pinMode(PIN_POWER_SWITCH, OUTPUT);
+
+    
+  //All buttons are hardware debounced with resistor/capacitors
+  //This causes incorrect edge detections on the first power up
+  //This reset all user buttons
+  delay(100);
+  btnPowerSwitch.reset();
+  knobLeft.reset();
+  knobCenter.reset();
+  knobRight.reset();
+  btnDateDisplay.reset();
+  btnPowerSwitch.reset();
 
   //Setup the display according to the power status at startup
+  btnPowerSwitch.poll();
   digitalWrite(PIN_POWER_SWITCH, btnPowerSwitch.getState());
  
 }
@@ -179,12 +194,12 @@ void loop() {
     //start the real time clock!
     rtc.begin();
     if(rtc.lostPower()){
+      //set to build time
       rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-      ////rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
     }
 
-    //animation
-    PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x00; delay(50);
+    //short animation at startup
+    PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x00; delay(100);
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x11; delay(50);
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x22; delay(50);
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x33; delay(50);
@@ -195,15 +210,6 @@ void loop() {
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x88; delay(50);
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x99; delay(100);
     PORT_DISPLAY_LEFT = PORT_DISPLAY_CENTER = PORT_DISPLAY_RIGHT = 0x00; delay(200);
-
-    //All buttons are hardware debounced with resistor/capacitors
-    //This causes incorrect edge detections on the first power up
-    //This resetRight all user buttons
-    knobLeft.reset();
-    knobCenter.reset();
-    knobRight.reset();
-    btnDateDisplay.reset();
-    btnPowerSwitch.reset();
 
     //flush the display with current time
     previous = now = rtc.now();
@@ -264,47 +270,36 @@ void loop() {
       previous = now;
     }
     
-
-    //change state to display the date
-    if(btnDateDisplay.falling()){  
-      //user was currently setting the time and requested to display the date?
-      //this is an edge case that shouldn't matter
-      setLeft = setCenter = setRight = false;
-      
-      changeState(STATE_DISPLAY_DATE);
-      updateDate();
-    }
-    
-    
-
-    //update H
+    //update left (=Hours)
     if(setLeft){
       int8_t tmp = knobLeft.read();
       if(tmp != 0){
         h += tmp;
-        clampValue(&h, (int8_t)24);
+        clampValue(&h, (int8_t)0, (int8_t)23);
         //flush display
         numberToPort(&portLeftValue,h);
         flushDisplay(true, false, false);
       }
     }
 
+    //update center (=Minutes)
     if(setCenter){
       int8_t tmp = knobCenter.read();
       if(tmp != 0){
         m += tmp;
-        clampValue(&m, (int8_t)60);
+        clampValue(&m, (int8_t)0, (int8_t)59);
         //flush display
         numberToPort(&portCenterValue,m);
         flushDisplay(false, true, false);
       }
     }
 
+    //update right (=Seconds)
     if(setRight){
       int8_t tmp = knobRight.read();
       if(tmp != 0){
         s += tmp;
-        clampValue(&s, (int8_t)60);
+        clampValue(&s, (int8_t)0, (int8_t)59);
         //flush display
         numberToPort(&portRightValue,s);
         flushDisplay(false, false, true);
@@ -313,22 +308,23 @@ void loop() {
 
     //user wants to set time?
     if(knobLeft.falling()){
-      if(setLeft == false){
-        setLeft = true;
-        knobLeft.read(); //flush stored value if any
-      }
-      else{
+      if(setLeft){
         setLeft = false;
         //save HOUR set by the user
         rtc.adjust(DateTime(2000 + now.year(), now.month(), now.day(), h, now.minute(), now.second()));
         numberToPort(&portLeftValue,h);
         flushDisplay(true, false, false);
       }
+      else{
+        setLeft = true;
+        knobLeft.read(); //flush stored value if any
+      }
     }
 
     if(knobCenter.falling()){
       if(setCenter){
         setCenter = false;
+        //save MINUTE set by the user
         rtc.adjust(DateTime(2000 + now.year(), now.month(), now.day(), now.hour(), m, now.second()));
         numberToPort(&portCenterValue,m);
         flushDisplay(false, true, false);
@@ -340,17 +336,30 @@ void loop() {
     }
 
     if(knobRight.falling()){
-      if(setRight == false){
-        setRight = true;
-        knobRight.read(); //flush stored value if any
-      }
-      else{
+      if(setRight){
         setRight = false;
         //save SECOND set by the user
         rtc.adjust(DateTime(2000 + now.year(), now.month(), now.day(), now.hour(), now.minute(),s));
         numberToPort(&portRightValue,s);
         flushDisplay(false, false, true);
       }
+      else{
+        setRight = true;
+        knobRight.read(); //flush stored value if any
+      }
+    }
+
+
+    //change state to display the date
+    if(btnDateDisplay.falling()){  
+      //user was currently setting the time and requested to display the date?
+      //this is an edge case that shouldn't matter so we just discard what was
+      //the user setting up. Sort of like a "cancel" button
+      setLeft = setCenter = setRight = false;
+      blinker = false;
+      updateDate();
+      flushDisplay(true, true, true); //force refresh of display
+      changeState(STATE_DISPLAY_DATE);
     }
     
   
@@ -364,17 +373,163 @@ void loop() {
     knobRight.poll();
     btnDateDisplay.poll();
     
-    //switch back to displaying time
-    if(btnDateDisplay.falling()){
-      changeState(STATE_DISPLAY_TIME);
-      updateDate();
+    //blinker
+    blinkerAccumulator += elapsed;
+    while(blinkerAccumulator >= BLINK_SPEED){
+      blinkerAccumulator -= BLINK_SPEED;
+      blinker = !blinker;
+
+      if(blinker){
+        if(setLeft){
+          numberToPort(&portLeftValue,0xff);
+          flushDisplay(true, false, false);
+        }
+        if(setCenter){
+          numberToPort(&portCenterValue,0xff);
+          flushDisplay(false, true, false);
+        }
+        if(setRight){
+          numberToPort(&portRightValue,0xff);
+          flushDisplay(false, false, true);
+        }
+      }
+      else{
+        if(setLeft){
+          numberToPort(&portLeftValue,dd);
+          flushDisplay(true, false, false);
+        }
+        if(setCenter){
+          numberToPort(&portCenterValue,mm);
+          flushDisplay(false, true, false);
+        }
+        if(setRight){
+          numberToPort(&portRightValue,yy);
+          flushDisplay(false, false, true);
+        }
+      }
     }
 
     //query real time clock and update the date if it has changed
     now = rtc.now();
-    if(dd != now.day()){
+    if(previous.day() != now.day()){
       updateDate();
+      previous = now;
     }
+
+
+    //update left (=Days)
+    if(setLeft){
+      int8_t tmp = knobLeft.read();
+      if(tmp != 0){
+        dd += tmp;
+        clampValue(&dd, (int8_t)1, (int8_t)31);
+        //flush display
+        numberToPort(&portLeftValue,dd);
+        flushDisplay(true, false, false);
+      }
+    }
+
+    //update center (=Month)
+    if(setCenter){
+      int8_t tmp = knobCenter.read();
+      if(tmp != 0){
+        mm += tmp;
+        clampValue(&mm, (int8_t)1, (int8_t)12);
+        //flush display
+        numberToPort(&portCenterValue,mm);
+        flushDisplay(false, true, false);
+      }
+    }
+
+    //update right (=Year)
+    if(setRight){
+      int8_t tmp = knobRight.read();
+      if(tmp != 0){
+        yy += tmp;
+        clampValue(&yy, (int8_t)0, (int8_t)99);
+        //flush display
+        numberToPort(&portRightValue,yy);
+        flushDisplay(false, false, true);
+      }
+    }
+
+
+    //user wants to set date?
+    if(knobLeft.falling()){
+      if(setLeft){
+        setLeft = false;
+        //save DAY set by the user
+        if(isValidDate(dd,mm,yy)){
+          rtc.adjust(DateTime( (uint16_t)2000 + (uint16_t)now.year2(), now.month(), dd, now.hour(), now.minute(), now.second()));
+          numberToPort(&portLeftValue,dd);
+          flushDisplay(true, false, false);
+        }
+        else{
+          //restore date a known valid value
+          numberToPort(&portLeftValue,now.day());
+          flushDisplay(true, false, false);
+        }
+      }
+      else{
+        setLeft = true;
+        knobLeft.read(); //flush stored value if any
+      }
+    }
+    
+    if(knobCenter.falling()){
+      if(setCenter){
+        setCenter = false;
+        //save MONTH set by the user
+        if(isValidDate(dd,mm,yy)){
+          rtc.adjust(DateTime( (uint16_t)2000 + (uint16_t)now.year2(), mm, now.day(), now.hour(), now.minute(), now.second()));
+          numberToPort(&portCenterValue,mm);
+          flushDisplay(false, true, false);
+        }
+        else{
+          //restore date a known valid value
+          numberToPort(&portCenterValue,now.month());
+          flushDisplay(false, true, false);
+        }
+      }
+      else{
+        setCenter = true;
+        knobCenter.read(); //flush stored value if any
+      }
+    }
+
+    if(knobRight.falling()){
+      if(setRight){
+        setRight = false;
+        //save YEAR set by the user
+        if(isValidDate(dd,mm,yy)){
+          rtc.adjust(DateTime( (uint16_t)2000 + (uint16_t)yy, now.month(), now.day(), now.hour(), now.minute(), now.second()));
+          numberToPort(&portRightValue,yy);
+          flushDisplay(false, false, true);
+        }
+        else{
+          //restore date a known valid value
+          numberToPort(&portRightValue,now.year2());
+          flushDisplay(false, false, true);
+        }
+      }
+      else{
+        setRight = true;
+        knobRight.read(); //flush stored value if any
+      }
+    }
+
+    //change state to display the time
+    if(btnDateDisplay.falling()){  
+      //user was currently setting the date and requested to display the time?
+      //this is an edge case that shouldn't matter so we just discard what was
+      //the user setting up. Sort of like a "cancel" button
+      setLeft = setCenter = setRight = false;
+      blinker = false;
+      updateTime();
+      flushDisplay(true, true, true); //force refresh of display
+      changeState(STATE_DISPLAY_TIME);
+    }
+
     
   }
 
@@ -387,47 +542,59 @@ void loop() {
 
 }
 
-void clampValue(int8_t* value, int8_t max){
-  while(*value >= max){
-    *value -= max;
+
+///Clamp a value between min and max, with proper looping
+/// ex: if min=1, max=12, value=5 ==> output value = 5
+/// ex: if min=1, max=12, value=13 ==> output value = 1
+void clampValue(int8_t* value, int8_t min, int8_t max) {
+
+  while (*value > max) {
+    *value -=  (max-min+ (int8_t)1);
   }
-  while(*value < 0){
-    *value += max;
+  while (*value < min) {
+    *value += (max - min + (int8_t)1);
   }
 }
+
 
 void updateDate(){updateDate(true);}
 void updateDate(uint8_t flush){
-  dd = now.day();
-  mm = now.month();
-  yy = now.year2();
 
-  int8_t tH = dd / 10;
-  int8_t dH = dd - tH*10;
+  if(!setLeft){
+    dd = now.day();
+  }
 
-  int8_t tM = mm / 10;
-  int8_t dM = mm - tM*10;
+  if(!setCenter){
+    mm = now.month();
+  }
 
-  int8_t tS = yy / 10;
-  int8_t dS = yy - tS*10;
-
+  if(!setRight){
+    yy = now.year2();
+  }
+  
 
 
   if(flush){
-    portLeftValue = (tH << 4) | dH;
-    portCenterValue = (tM << 4) | dM;
-    portRightValue = (tS << 4) | dS;
-    flushDisplay();
+    numberToPort(&portLeftValue, dd);
+    numberToPort(&portCenterValue, mm);
+    numberToPort(&portRightValue, yy);
+    flushDisplay(now.day() != previous.day(), now.month() != previous.month(), now.year2() != previous.year2());
   }
+
+
 
 }
 
 
+
+/// Convert a 2 digit base 10 number to individual 4 bits component
+/// creating a single 8 bit number
+/// ex: 12 => 0x12 (1)0001 (2)0010
+//  ex: 53 => 0x53 (5)0101 (3)0011
 void numberToPort(uint8_t* port, int8_t value){
   int8_t tH = value / 10;
   int8_t dH = value - tH*10;
   *port = (tH << 4) | dH;
-  
 }
 
 void flushDisplay(){flushDisplay(true,true,true);}
@@ -481,6 +648,8 @@ void updateTime(uint8_t flush){
   }
 
 }
+
+
 
 
 
