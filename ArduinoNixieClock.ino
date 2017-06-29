@@ -60,8 +60,6 @@
 
 #include "Button.h"
 #include "Knob.h"
-#include "TinyGPS++.h"
-#include <SoftwareSerial.h>
 #include "RTClib.h"
 
 RTC_DS3231 rtc;
